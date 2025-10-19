@@ -409,14 +409,14 @@ export default class RagGatewayDemo extends LightningElement {
 
 - 📷 LWC with 3 tabs
 
-![Method 1 ](./imgs/method1rag.jpg)
-![Method 2 ](./imgs/method2rag.jpg)
-![Method 3 ](./imgs/method3norag.jpg)
+![Method 1 ](./imgs/method1rag.jpeg)
+![Method 2 ](./imgs/method2rag.jpeg)
+![Method 3 ](./imgs/method3norag.jpeg)
 ---
 
 ## 🔮 Final Thoughts
 
 This experiment proves that **Salesforce is no longer just CRM** – it can **orchestrate graph intelligence via MCP and Neo4j**. With **GraphRAG**, **grounded cypher generation**, and **structured MCP tools**, we can turn Salesforce into a **graph-aware intelligent console**.
 
----
+
 
