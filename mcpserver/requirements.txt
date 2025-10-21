@@ -1,0 +1,6 @@
+neo4j>=5.10.0
+neo4j-graphrag>=0.6.0
+openai>=1.0.0
+python-dotenv>=1.0.0
+modelcontextprotocol>=0.1.0
+
