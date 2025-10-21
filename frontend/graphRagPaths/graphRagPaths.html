@@ -1,0 +1,41 @@
+<template>
+  <lightning-card title="Supplier Path Finder" icon-name="standard:search">
+    <div class="slds-p-around_medium">
+      <lightning-textarea
+        label="Enter your question"
+        placeholder="e.g. ‘Find supplier chain for PD3 with risk < 0.3’"
+        value={question}
+        onchange={handleQuestion}
+      ></lightning-textarea>
+
+      <lightning-button
+        label="No RAG"
+        title="Run without RAG"
+        onclick={runNoRag}
+      ></lightning-button>
+      <lightning-button
+        label="Method 1 (LLM→Cypher)"
+        variant="brand"
+        onclick={runMethod1}
+      ></lightning-button>
+      <lightning-button
+        label="Method 2 (Text2Cypher Retriever)"
+        onclick={runMethod2}
+      ></lightning-button>
+
+      <template if:true={loading}>
+        <p class="slds-m-top_medium">Loading results …</p>
+      </template>
+
+      <template if:true={results}>
+        <div class="slds-m-top_medium">
+          <lightning-datatable
+            data={results}
+            columns={columns}
+            key-field="id"
+          ></lightning-datatable>
+        </div>
+      </template>
+    </div>
+  </lightning-card>
+</template>

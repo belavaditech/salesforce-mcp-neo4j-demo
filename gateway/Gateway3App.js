@@ -1,151 +1,119 @@
-// gateway.js
-// Node.js Gateway that demonstrates:
-// - Method 1: translateToCypher() via LLM -> call read_neo4j_cypher MCP tool
-// - Method 2: call text2cypher_retriever MCP tool -> use returned grounding
-// - No-RAG: simple pre-canned logic (or direct SOQL/Apex-like behavior simulated)
+/**
+ * Node.js Gateway for Salesforce → MCP Neo4j integration
+ * Provides three routes: /method1, /method2, /no-rag
+ *  
+ * Architecture:
+ *  - Receives natural language request from LWC/Apex
+ *  - Calls MCP client tool for Neo4j (read/cypher or text2cypher)
+ *  - Returns JSON with mode, cypher, raw grounding, grounded answer
+ */
 
-require('dotenv').config();
-const express = require('express');
-const bodyParser = require('body-parser');
-const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
-const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
-const { OpenAI } = require('openai');
+import express from 'express';
+import bodyParser from 'body-parser';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { OpenAI } from 'openai';
 
 const app = express();
 app.use(bodyParser.json());
 
+// Setup MCP client transport
+const transport = new StreamableHTTPClientTransport('http://localhost:8005/mcp/');
+const mcpClient = new Client({ name: 'Neo4j-Gateway', version: '1.0.0' });
+await mcpClient.connect(transport);
+console.log('✅ Connected to MCP Neo4j Gateway');
+
+// Setup OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-async function createMcpClient() {
-  const transport = new StreamableHTTPClientTransport('http://localhost:8005/mcp/');
-  const client = new Client({ name: 'Neo4j Gateway', version: '1.0.0' });
-  await client.connect(transport);
-  console.log('✅ Connected to MCP Neo4j Cypher');
-  return client;
-}
-
-let mcpClientPromise = createMcpClient();
-
-// ---------- Utility: Translate natural language -> Cypher using LLM (Method 1) ----------
+/**
+ * Helper method: translate natural language to Cypher via LLM
+ * @param {string} question
+ * @returns {Promise<string>} Cypher query
+ */
 async function translateToCypher(question) {
-  const prompt = `You are an assistant that converts natural language questions into Cypher queries for Neo4j.
-Database contains nodes: Supplier, Component, Product, Case; relationships: CAN_SUPPLY, USED_IN, SUPPLIES.
-Return ONLY the Cypher query without explanation, no markdown.
+  const prompt = `
+You are an assistant that converts natural language questions into Cypher queries.
+Database contains Supplier, Component, Product, Case nodes and relationships.
+Return ONLY the Cypher query (no explanation, no markdown).
 
 Question: "${question}"
-Cypher:`;
-
-  const response = await openai.chat.completions.create({
+Cypher:
+  `;
+  const resp = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
-    messages: [{ role: 'user', content: prompt }],
+    messages: [ { role: 'user', content: prompt } ],
     temperature: 0
   });
-
-  let query = response.choices[0].message.content.trim();
+  let query = resp.choices[0].message.content.trim();
   query = query.replace(/```[a-zA-Z]*\n?/g, '').replace(/```/g, '').trim();
   return query;
 }
 
-// ---------- Utility: Produce grounded LLM answer from graph data ----------
-async function groundedAnswer(originalQuestion, graphData, cypher) {
-  const context = `Grounding data (first rows): ${JSON.stringify(graphData).slice(0, 10000)}`;
-  const prompt = `You are an expert product design analyst.
-Use the following grounding data from Neo4j to answer the question below. Be concise and show the reasoning paths and metrics (cost, risk, time) when possible. Use the cypher used: ${cypher}\n\nGrounding: ${context}\n\nQuestion: ${originalQuestion}`;
-
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.1
-  });
-
-  return response.choices[0].message.content.trim();
-}
-
-// ---------- Endpoints ----------
-
-// Health
-app.get('/health', (req, res) => res.json({ ok: true }));
-
-// 1) Method 1: LWC -> Gateway -> translateToCypher(LM) -> MCP read_neo4j_cypher -> groundedAnswer -> return
+/**
+ * Handler: Method 1 – LLM → Cypher
+ */
 app.post('/method1', async (req, res) => {
   try {
     const { naturalLanguage } = req.body;
-    const cypherQuery = await translateToCypher(naturalLanguage);
+    const cypher = await translateToCypher(naturalLanguage);
+    const result = await mcpClient.callTool({ name: 'read_neo4j_cypher', arguments: { query: cypher } });
+    console.log('➡️ result:', result);
 
-    const client = await mcpClientPromise;
-    const result = await client.callTool({ name: 'read_neo4j_cypher', arguments: { query: cypherQuery } });
+    // Grounded answer could integrate with LLM summarisation
+    const grounded = await groundedAnswer(naturalLanguage, result.content?.json || result.content?.text, cypher);
 
-	  console.log(result);
-
-    const grounded = await groundedAnswer(naturalLanguage, result.content?.json || result.content?.text || result, cypherQuery);
-
-    res.json({ mode: 'method1', cypher: cypherQuery, rawGrounding: result.content || null, groundedAnswer: grounded });
+    res.json({ mode: 'method1', cypher, rawGrounding: result.content, groundedAnswer: grounded });
   } catch (err) {
-    console.error(err);
+    console.error('❌ /method1 error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// 2) Method 2: LWC -> Gateway -> MCP text2cyphertool -> returns cypher + grounding -> groundedAnswer -> return
+/**
+ * Handler: Method 2 – GraphRAG Text2CypherRetriever
+ */
 app.post('/method2', async (req, res) => {
-
-  console.log("method2 LWC -> Gateway -> MCP text2cyphertool");
   try {
     const { naturalLanguage } = req.body;
-    const client = await mcpClientPromise;
+    console.log('ℹ️ method2 input:', naturalLanguage);
 
-    // Call the MCP tool that exposes text2cypher retriever on the Neo4j side
-    const toolResult = await client.callTool({ name: 'text2cypher', arguments: { query: naturalLanguage } });
+    const toolResult = await mcpClient.callTool({ name: 'text2cypher', arguments: { query: naturalLanguage } });
+    console.log('➡️ toolResult:', toolResult);
 
-	  console.log(toolResult);
-    // Expect toolResult.content to include { cypherQuery, graphData }
-    // const cypherQuery = toolResult.content?.json?.cypherQuery || toolResult.content?.json?.cypher || (toolResult.content?.text || '').slice(0, 2000);
+    let cypher, graphData;
+    const blk = toolResult.content?.[0];
+    if (blk?.type === 'text') {
+      const parsed = JSON.parse(blk.text);
+      cypher = parsed.cypher || parsed.cypherQuery;
+      graphData = parsed.graphData || parsed.rows || parsed.data;
+    }
 
-
-  const contentBlock = toolResult.content?.[0];
-  if (contentBlock?.type === 'text' && contentBlock.text) {
-    const parsed = JSON.parse(contentBlock.text);
-    cypherQuery = parsed.cypher || parsed.cypherQuery || parsed.metadata?.cypher;
-    graphData = parsed.graphData || parsed.rows || parsed.records || parsed.data;
-  }
-
-
-    console.log("cypherQuery = " + cypherQuery);
-    // const graphData = toolResult.content?.json?.graphData || toolResult.content?.json?.rows || toolResult.content?.text || toolResult.content || {};
-	
-
-    console.log("graphData = " + graphData);
-
-    const grounded = await groundedAnswer(naturalLanguage, graphData, cypherQuery);
-
-    console.log("grounded = " + grounded);
-
-    res.json({ mode: 'method2', cypher: cypherQuery, rawGrounding: graphData, groundedAnswer: grounded });
+    const grounded = await groundedAnswer(naturalLanguage, graphData, cypher);
+    res.json({ mode: 'method2', cypher, rawGrounding: graphData, groundedAnswer: grounded });
   } catch (err) {
-    console.error(err);
+    console.error('❌ /method2 error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// 3) No-RAG: simple heuristic mock (simulate direct DB lookups or Apex)
+/**
+ * Handler: No-RAG – direct Cypher execution
+ */
 app.post('/no-rag', async (req, res) => {
   try {
     const { naturalLanguage } = req.body;
-    const cypherQuery = await translateToCypher(naturalLanguage);
+    const cypher = await translateToCypher(naturalLanguage);
+    const result = await mcpClient.callTool({ name: 'read_neo4j_cypher', arguments: { query: cypher } });
+    console.log('➡️ /no-rag result:', result);
 
-    const client = await mcpClientPromise;
-    const result = await client.callTool({ name: 'read_neo4j_cypher', arguments: { query: cypherQuery } });
-
-	  console.log(result);
-
-    // const grounded = await groundedAnswer(naturalLanguage, result.content?.json || result.content?.text || result, cypherQuery);
-
-    res.json({ mode: 'no-rag', cypher: cypherQuery, rawGrounding: naturalLanguage, groundedAnswer: result.content || null });
+    res.json({ mode: 'no-rag', cypher, rawGrounding: naturalLanguage, groundedAnswer: result.content });
   } catch (err) {
-    console.error(err);
+    console.error('❌ /no-rag error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
+// Start listener
 const PORT = process.env.PORT || 9005;
-app.listen(PORT, () => console.log(`🚀 Gateway running on http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Gateway running at http://localhost:${PORT}`));
