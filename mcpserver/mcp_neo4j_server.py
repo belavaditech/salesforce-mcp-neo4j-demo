@@ -29,7 +29,7 @@ retriever = Text2CypherRetriever(driver=driver, llm=llm, neo4j_database="neo4j")
 # Initialize MCP server
 mcp = FastMCP(name="neo4j-mcp-server", stateless_http=True)  # lighter service mode
 
-@mcp.tool(name="read_cypher", description="Execute read-only Cypher against Neo4j")
+@mcp.tool(name="read_neo4j_cypher", description="Execute read-only Cypher against Neo4j")
 def read_cypher(query: str) -> dict:
     """
     Executes a Cypher query in Neo4j in READ mode and returns rows.

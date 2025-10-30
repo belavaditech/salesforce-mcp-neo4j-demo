@@ -86,7 +86,7 @@ app.post('/method2', async (req, res) => {
     if (blk?.type === 'text') {
       const parsed = JSON.parse(blk.text);
       cypher = parsed.cypher || parsed.cypherQuery;
-      graphData = parsed.graphData || parsed.rows || parsed.data;
+      graphData = parsed.graphData || parsed.rows || parsed.data || "";
     }
 
     const grounded = await groundedAnswer(naturalLanguage, graphData, cypher);
